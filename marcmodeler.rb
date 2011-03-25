@@ -1,16 +1,41 @@
-$KCODE = 'u'
+#!/usr/bin/env ruby
 require 'rubygems'
 #require 'marc'
-require 'jcode'
+require 'jcode' if RUBY_VERSION < '1.9'
 require 'enhanced_marc'
-require 'rdf_resource'
-require 'lcsh_labels'
+require './rdf_resource'
+require './lcsh_labels'
 require 'isbn/tools'
-reader = MARC::ForgivingReader.new('cca.utf8.mrc')
+
+# quit unless our script gets two command line arguments 
+unless ARGV.length > 1
+  puts "Missing input file!"
+  puts "Usage: ruby marcmodeler.rb InputFile.mrc [OutputFile.rdf]\n"
+  exit
+end
+
+# our input file should be the first command line arg
+input_file = ARGV[0]
+
+# our output file should be the second command line arg
+output_file = ARGV[1]
+
+# forgiving reader (marc is full of empty holes...)
+reader = MARC::ForgivingReader.new(input_file)
+
+# unforgiving reader, expects strict marc ...
+#reader = MARC::Reader.new(input_file)
 
 i = 0
 
 class String
+=begin
+ added function definitions to default string:
+ slug : regex, removes everything but word, character or '-'
+ strip_trailing_punct 
+ strip_leading_and_trailing_punct
+ lpad : ?
+=end
   def slug
     slug = self.gsub(/[^\w\s\-]/,"")
     slug.gsub!(/\s/,"_")
@@ -29,8 +54,19 @@ class String
 end
 
 class MARC::Record
-  @@base_uri = 'http://library.cca.edu/core'
-  @@missing_id_prefix = 'cca'
+=begin
+   the actual RDF extension class to MARC::Record
+   new functions:
+     subdivided?(subject)
+     subject_to_string(subject)
+     top_concept(subject)
+     to_rdf_resources
+     relate_identity(datafield, resource, identity)
+     to_rdf_resources
+     
+=end
+  @@base_uri = 'http://koha.deichman.no/rdfstore'
+  @@missing_id_prefix = 'pode'
   @@missing_id_counter = 0
   @@relators = YAML::load_file('relation.yml')
     
@@ -43,6 +79,7 @@ class MARC::Record
     return false
   end
   
+  # function: converts subject from subject's subfield v,x,y or z to string literal
   def subject_to_string(subject)
     literal = ''
     subject.subfields.each do | subfield |
@@ -58,6 +95,7 @@ class MARC::Record
     literal.strip_trailing_punct  
   end
   
+  # function: parses marc fields for subject and appends subfield to marc
   def top_concept(subject)
     field = MARC::DataField.new(subject.tag, subject.indicator1, subject.indicator2)
     subject.subfields.each do | subfield |
@@ -69,17 +107,46 @@ class MARC::Record
     return field
   end
   
+  # main function for converting to RDF
   def to_rdf_resources
     resources = []
+    # appends controlfield 001 if missing
     unless self['001']
       controlnum = MARC::ControlField.new('001')
       controlnum.value = "#{@@missing_id_prefix}#{@@missing_id_counter}"
       @@missing_id_counter += 1
       self << controlnum
     end
+    # gets 001 value, gives resource an uri and relates as manifestation
     id = self['001'].value.strip
     resources << manifestation = RDFResource.new("#{@@base_uri}/m/#{id}")    
     manifestation.relate("[rdf:type]", "[frbr:Manifestation]")
+    
+    
+=begin
+    Get dct:title from tags 245, subfield $a
+    find_all returns all elements that matches block expression into object array 
+    enum.find_all { |object array | block expression }
+=end
+
+    titles = self.find_all {|field| field.tag =~ /^245/}
+    
+    titles.each do | title |
+        if title['a']
+          manifestation.assert("[dct:title]", title['a'])
+        end
+        if title['b']
+          manifestation.assert("[rda:otherTitleInformation]", title['b'])
+        end
+        if title['c']
+          manifestation.assert("[rda:statementOfResponsibility]", title['c'])
+        end
+        if title['n']
+          manifestation.assert("[bibo:number]", title['n'])
+        end
+    end 
+
+=begin   
     if self['245']
       if self['245']['a']
         title = self['245']['a'].strip_trailing_punct
@@ -92,14 +159,16 @@ class MARC::Record
       if self['245']['c']
         manifestation.assert("[rda:statementOfResponsibility]", self['245']['c'].strip_trailing_punct)
       end
-    end
-    if self['245']['n']
-      manifestation.assert("[bibo:number]", self['245']['n'])
+      if self['245']['n']
+        manifestation.assert("[bibo:number]", self['245']['n'])
+      end
     end
     manifestation.assert("[dct:title]", title)
     if self['210']
       manifestation.assert("[bibo:shortTitle]", self['210']['a'].strip_trailing_punct)
     end
+=end
+
     if self['020'] && self['020']['a']
       isbn = ISBN_Tools.cleanup(self['020']['a'].strip_trailing_punct)
       if ISBN_Tools.is_valid?(isbn)
@@ -126,6 +195,28 @@ class MARC::Record
     if self['767'] && self['767']['t']
       manifestation.assert("[rda:parallelTitleProper]", self['767']['t'].strip_trailing_punct)
     end    
+
+=begin
+    Get dct:description from tags 5xx, subfield $a
+    Unless 571, then bibo:identiifer
+    find_all returns all elements that matches block expression into object array 
+    enum.find_all { |object array | block expression }
+=end
+
+    descriptions = self.find_all {|field| field.tag =~ /^5../}
+    
+    descriptions.each do | description |
+      unless ["571"].index(description.tag)
+        if description['a']
+          manifestation.assert("[dct:description]", description['a'])
+        end
+      else
+        if description['a']
+          manifestation.assert("[bibo:identifier]", description['a'])
+        end
+      end
+    end 
+    
     subjects = self.find_all {|field| field.tag =~ /^6../}
     
     subjects.each do | subject |
@@ -265,9 +356,9 @@ class MARC::Record
     pages.each do | page |
       manifestation.assert("[bibo:pages]",page['a'].strip_trailing_punct)
     end
-    if self.form      
-      manifestation.assert("[dc:format]", self.form(true))
-    end
+#    if self.form      
+#      manifestation.assert("[dc:format]", self.form(true))
+#    end
 
     identities = self.find_all{|field| field.tag =~ /100|110|400|410|700|710|720|790|791|796|797|800|810|896|897/}
     identities.each do | identity_field |
@@ -276,24 +367,36 @@ class MARC::Record
       relate_identity(identity_field, manifestation, identity)
     end 
 
-    meetings = self.find_all{|field| field.tag =~ /111|411|711|792|798|811|898/}
-    meetings.each do | meeting |
-      event = Event.new_from_field(meeting, "#{@@base_uri}/events/")
-      resources << event.resource
-      relate_event(meeting, manifestation, event)
-    end  
+#    meetings = self.find_all{|field| field.tag =~ /111|411|711|792|798|811|898/}
+#    meetings.each do | meeting |
+#      event = Event.new_from_field(meeting, "#{@@base_uri}/events/")
+#      resources << event.resource
+#      relate_event(meeting, manifestation, event)
+#    end  
+
     if self['506'] && self['506']['a']
       manifestation.assert('[dct:accessRights]',self['506']['a'])
     end
-    if aud = self.audience_level(true)
-      audience = RDFResource.new("#{@@base_uri}/audiences/#{aud.slug}")
-      audience.relate("[rdf:type]","[dct:AgentClass]")
-      audience.assert("[dct:title]", aud)
-      manifestation.relate("[dct:audience]",audience.uri)
-      resources << audience
-    end
+#    if aud = self.audience_level(true)
+#      audience = RDFResource.new("#{@@base_uri}/audiences/#{aud.slug}")
+#      audience.relate("[rdf:type]","[dct:AgentClass]")
+#      audience.assert("[dct:title]", aud)
+#      manifestation.relate("[dct:audience]",audience.uri)
+#      resources << audience
+#    end
     
+    # publication info
     if self['260']
+      # publicationPlace
+      if self['260']['a'] 
+        manifestation.assert('[dct:publicationPlace]',self['260']['a'])
+      end
+      # publisher
+      if self['260']['b'] 
+        manifestation.relate("[rdf:type]", "[foaf:Organization]")
+        manifestation.assert('[dct:publisher]',self['260']['b'])
+      end
+      # date
       subfield_c = self['260'].find_all {|subfield| subfield.code == 'c'}
       subfield_c.each do | c |
         if c.value =~ /\bc[0-9]/
@@ -306,6 +409,7 @@ class MARC::Record
     resources
   end
   
+  # parse yaml and identity fields and create relationships
   def relate_identity(datafield, resource, identity)
     if ["100","110"].index(datafield.tag)
       resource.relate("[dct:creator]", identity.resource.uri)
@@ -344,43 +448,42 @@ class MARC::Record
     else
       unless ["100","110"].index(datafield.tag)
         resource.relate("[dct:contributor]", identity.resource.uri)
-        resource.assert("[dc:contributor]", identity.name)        
+        resource.assert("[dct:contributor]", identity.name)        # fixed typo: dc:contributor
       end
     end
   end
 end
 
 class MARC::BookRecord
-
   def to_rdf_resources
     resources = super
     book = resources[0]
     if self.is_conference?
-      book.relate("[rdf:type]","[bibo:Proceedings]")
+     book.relate("[rdf:type]","[bibo:Proceedings]")
     elsif self.is_manuscript?
       book.relate("[rdf:type]","[bibo:Manuscript]")
-    elsif self.nature_of_contents.index("m")
-      book.relate("[rdf:type]","[bibo:Thesis]")
-    elsif self.nature_of_contents.index("u")
-      book.relate("[rdf:type]","[bibo:Standard]")
-    elsif self.nature_of_contents.index("j")
-      book.relate("[rdf:type]","[bibo:Patent]")    
-    elsif self.nature_of_contents.index("t")
-      book.relate("[rdf:type]","[bibo:Report]")
-    elsif self.nature_of_contents.index("l")
-      book.relate("[rdf:type]","[bibo:Legislation]")
-    elsif  self.nature_of_contents.index("v")
-      book.relate("[rdf:type]","[bibo:LegalCaseDocument]")
-    elsif !(self.nature_of_contents & ["c", "d", "e", "r"]).empty?
-      book.relate("[rdf:type]","[bibo:ReferenceSource]")
+#    elsif self.nature_of_contents.index("m")
+#      book.relate("[rdf:type]","[bibo:Thesis]")
+#    elsif self.nature_of_contents.index("u")
+#      book.relate("[rdf:type]","[bibo:Standard]")
+#    elsif self.nature_of_contents.index("j")
+#      book.relate("[rdf:type]","[bibo:Patent]")    
+#    elsif self.nature_of_contents.index("t")
+#      book.relate("[rdf:type]","[bibo:Report]")
+#    elsif self.nature_of_contents.index("l")
+#      book.relate("[rdf:type]","[bibo:Legislation]")
+#    elsif  self.nature_of_contents.index("v")
+#      book.relate("[rdf:type]","[bibo:LegalCaseDocument]")
+#    elsif !(self.nature_of_contents & ["c", "d", "e", "r"]).empty?
+#      book.relate("[rdf:type]","[bibo:ReferenceSource]")
     else
       book.relate("[rdf:type]", "[bibo:Book]")
     end
-    if self.nature_of_contents
-      self.nature_of_contents(true).each do | genre |        
-        book.assert("[dct:type]", genre)
-      end
-    end
+ #   if self.nature_of_contents
+ #     self.nature_of_contents(true).each do | genre |        
+ #       book.assert("[dct:type]", genre)
+ #     end
+ #   end
     #puts book.to_rdfxml
     return resources
   end
@@ -401,6 +504,13 @@ class MARC::VisualRecord
 end
 
 class Identity
+=begin
+  Identity class for creating inferred identity resources 
+  functions:
+    new_from_field(field, base_uri)
+    path(datafield)						
+    relations(field)    				# empty
+=end
   attr_accessor :name, :resource
   def self.new_from_field(field, base_uri)
     identity = self.new
@@ -427,6 +537,7 @@ class Identity
     if personal.index(field.tag)
       resource.relate("[rdf:type]", "[foaf:Person]")
       if field.indicator1 == "1"
+      
         last,first = field['a'].strip_trailing_punct.split(", ")
         if last && first
           resource.assert("[foaf:surname]", last)
@@ -478,7 +589,14 @@ class Identity
     
   end
 end
-  
+
+=begin
+  Beginning of actual code
+  * Start by loading relation yaml file into hash object
+  * then parse each record and look for tags that give relations
+  * if relation tag have field 'e' or '4' put them in object relators
+  * the
+=end  
 begin
   yaml = YAML.load_file('relation.yml')
 rescue Errno::ENOENT
@@ -502,18 +620,35 @@ rescue Errno::ENOENT
   fh.close
   exit
 end
-@resources = []
+
 types = []
+
+=begin
+  The actual record processing
+  * opens file handle 'output_file'
+  * outputs standard rdfxml header
+  * parses each Marc record through function to_rdf_resources and appends to instance variable @resources
+  * parses each resource  through function to_rdfxml and appends to file output
+=end
+output = open(output_file, "w+")
+output << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+output << "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"  
+
 reader.each do | record |
+	@resources = []
   types << record.class.to_s
-  next unless record.is_a?(MARC::VisualRecord)
+
+  #next unless record.is_a?(MARC::VisualRecord)
   @resources += record.to_rdf_resources
+	@resources.each do | resource |
+	output << resource.to_rdfxml
+	output << "\n"
+	end
   i += 1
-  break if i > 1000
+#  break if i > 1000
 end
-#puts types.uniq.inspect
-puts "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
-@resources.each do | resource |
-  puts resource.to_rdfxml
-end
-puts "</rdf:RDF>"
+
+puts types.uniq.inspect   # prints out unique rdf types
+
+output << "</rdf:RDF>"
+output.close

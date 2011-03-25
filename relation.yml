@@ -230,3 +230,58 @@ trl:
     use: tr
 binder: 
     use: bookbinder
+
+skuesp:
+    use: act
+bearb:
+    use: ctb
+biogr:
+    label: Biographer
+    relationship: "[bibo:biographer]"
+    literal: "[dc:contributor]"
+dir:
+    use: cnd
+forf:
+    use: aut
+foto:
+    use: pht
+gjendikt:
+    use: tr
+overs:
+    use: tr
+innl:
+    label: Reader
+    relationship: "[role:reader]"
+    literal: "[dc:contributor]"
+oppl:
+    use: innl
+komm:
+    use: cmm
+komp:
+    use: comp
+manus:
+    label: Scriptwriter
+    relationship: "[role:scriptWriter]"
+    literal: "[dc:contributor]"
+medarb:
+    use: ctb
+medf:
+    label: Co-Writer
+    relationship: "[role:creator]"
+    literal: "[dc:contributor]"
+red: 
+    use: ed
+reg:
+    use: drt
+sang:
+    use: prf
+skues:
+    use: act
+tekstf:
+    label: LyricWriter
+    relationship: "[role:lyricWriter]"
+    literal: "[dc:contributor]"
+utg:
+    use: pbl
+utøv:
+    use: prf

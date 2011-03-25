@@ -4,3 +4,20 @@ Requirements:
   * enhanced_marc (http://github.com/rsinger/enhanced-marc/tree)
   * datamapper (for LCSH linking)
   * sqlite
+
+INSTALL 
+Ubuntu prerequisites:
+
+sudo apt-get install sqlite3 libsqlite3-ruby libsqlite3-dev
+
+Gems prerequisites:
+
+sudo gem install enhanced_marc dm-migrations isbn-tools datamapper builder curies dm-sqlite-adapter
+
+
+USAGE
+ruby marcmodeler.rb [inputfile.mrc] [outputfile.rdf]
+
+# run process fork and catch time
+( time ./ruby marcmodeler.rb )  2> tid.txt &
+
